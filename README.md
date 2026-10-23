@@ -59,12 +59,18 @@ Each variant has a matching lualine theme (`alabaster`, `alabaster-bg`, `alabast
 
 ## Configuration
 
-Two config options are provided:
+Three config options are provided:
 
+- `g:alabaster_background` (default: unset). A `#RRGGBB` hex color used as the background by every variant. Neutral UI surfaces (popup menu, statusline, cursorline, selection, folds, borders) are derived from it, and text switches between dark and light based on its luminance. When unset, each variant keeps its built-in background.
 - `g:alabaster_dim_comments` (default: `false`). When true, comments are dimmed instead of being highlighteed bright yellow.
 - `g:alabaster_floatborder` (default: `false`).
   When true, floating window borders have a foreground colour and background colour is the same as `Normal`.
   When false, floating window borders have no foreground colour and background colour is the same as popup menus.
+
+```vim
+let g:alabaster_background = "#FFFCF0"
+colorscheme alabaster
+```
 
 ## Themed plugins
 

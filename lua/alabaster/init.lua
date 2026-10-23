@@ -1,5 +1,7 @@
 local M = {}
 
+local color = require("alabaster.color")
+
 local function clear()
     vim.cmd("hi clear")
     if vim.fn.exists("syntax_on") == 1 then
@@ -13,6 +15,117 @@ local function apply(colors_name, theme)
         vim.api.nvim_set_hl(0, group, hl)
     end
 end
+
+local warned_background = false
+
+-- Reads g:alabaster_background, returning a normalized "#RRGGBB" or nil.
+local function custom_background()
+    local raw = vim.g.alabaster_background
+    if raw == nil or raw == "" then
+        return nil
+    end
+    local bg = color.normalize(raw)
+    if not bg then
+        if not warned_background then
+            warned_background = true
+            vim.notify(
+                "alabaster: invalid g:alabaster_background " .. vim.inspect(raw) .. " (expected #RRGGBB), using the default",
+                vim.log.levels.WARN
+            )
+        end
+        return nil
+    end
+    return bg
+end
+
+-- Blend toward black on light backgrounds, toward white on dark ones.
+local function blend(bg, dark, dark_amount, light_amount)
+    if dark then
+        return color.tint(bg, dark_amount)
+    end
+    return color.shade(bg, light_amount)
+end
+
+local function paint(theme, groups, attrs)
+    for _, group in ipairs(groups) do
+        local hl = theme[group] or {}
+        for key, value in pairs(attrs) do
+            hl[key] = value
+        end
+        theme[group] = hl
+    end
+end
+
+-- Re-derives the neutral UI surfaces from a custom background.
+local function retint(theme, bg, dark)
+    local subtle = blend(bg, dark, 0.06, 0.04)
+    local statusline = blend(bg, dark, 0.09, 0.08)
+    local visual = blend(bg, dark, 0.14, 0.12)
+    local selection = blend(bg, dark, 0.18, 0.16)
+    local border = blend(bg, dark, 0.22, 0.20)
+    local scrollbar = blend(bg, dark, 0.12, 0.28)
+    local thumb = blend(bg, dark, 0.40, 0.62)
+    local nontext = blend(bg, dark, 0.45, 0.55)
+    local linenr = blend(bg, dark, 0.40, 0.48)
+    local overlay = blend(bg, dark, 0.05, 0.03)
+
+    local fg = (theme.Normal or {}).fg or (dark and "#cecece" or "#000000")
+
+    theme.Normal = { bg = bg, fg = fg }
+    theme.NormalFloat = { bg = subtle }
+    theme.FloatBorder = vim.g.alabaster_floatborder and { bg = bg, fg = border }
+        or {
+            bg = subtle,
+            fg = subtle,
+        }
+    theme.WinBar = { bg = bg, fg = (theme.WinBar or {}).fg, bold = true }
+    theme.WinBarNC = { bg = bg, fg = (theme.WinBarNC or {}).fg }
+    theme.TermCursorNC = { fg = bg, bg = fg }
+    theme.healthSuccess = { fg = (theme.healthSuccess or {}).fg, bg = bg }
+    theme.ISwapSnipe = { bg = (theme.ISwapSnipe or {}).bg, fg = bg }
+
+    paint(theme, { "ColorColumn", "CursorColumn", "CursorLine", "QuickFixLine", "Pmenu" }, { bg = subtle })
+    paint(
+        theme,
+        {
+            "StatusLine",
+            "StatusLineNC",
+            "TabLine",
+            "TabLineFill",
+            "TabLineSel",
+            "StatuslineAdd",
+            "StatuslineErr",
+            "StatuslineHint",
+            "StatuslineInfo",
+            "StatuslineWarn",
+            "StatuslineBlue",
+            "StatuslineRed",
+            "StatuslineGreen",
+            "StatuslineCyan",
+            "StatuslineMagenta",
+        },
+        { bg = statusline }
+    )
+    paint(theme, { "Visual", "VisualNOS" }, { bg = visual })
+    paint(theme, { "PmenuSel", "WildMenu" }, { bg = selection })
+    paint(theme, { "PmenuSbar" }, { bg = scrollbar })
+    paint(theme, { "PmenuThumb" }, { bg = thumb })
+    paint(theme, { "VertSplit", "EndOfBuffer", "TelescopeBorder", "FzfLuaBorder" }, { fg = border })
+    paint(theme, { "NonText" }, { fg = nontext })
+    paint(theme, { "LineNr" }, { fg = linenr })
+    paint(theme, { "Folded" }, { bg = statusline })
+    paint(theme, { "LspReferenceText", "LspReferenceRead", "LspReferenceWrite", "@text.note" }, { bg = overlay })
+
+    if dark then
+        paint(theme, { "Search" }, { bg = selection })
+        paint(
+            theme,
+            { "SpecialComment", "TSStringRegex", "TSStringEscape", "@string.regex", "@string.escape", "debugPc" },
+            { bg = overlay }
+        )
+    end
+end
+
 
 -- Terminal colors shared by the light variants (bg/mono) and the light base.
 local function light_terminal_colors()
@@ -36,7 +149,15 @@ end
 
 local function alabaster()
     clear()
-    if vim.o.background == "dark" then
+    local custom = custom_background()
+    local dark
+    if custom then
+        dark = color.is_dark(custom)
+        vim.o.background = dark and "dark" or "light"
+    else
+        dark = vim.o.background == "dark"
+    end
+    if dark then
         -- terminal colors
         vim.g.terminal_color_0 = "#000000"
         vim.g.terminal_color_1 = "#d2322d"
@@ -56,7 +177,7 @@ local function alabaster()
         vim.g.terminal_color_15 = "#ffffff"
 
         -- colors
-        local bg = "#0e1415"
+        local bg = custom or "#0e1415"
         local fg = "#cecece"
         local punct_fg = "#708b8d"
         local def_fg = "#71ade7"
@@ -416,12 +537,15 @@ local function alabaster()
             ["@lsp.typemod.struct.declaration"] = { fg = def_fg },
             ["@lsp.typemod.type.declaration"] = { fg = def_fg },
         }
+        if custom then
+            retint(theme, custom, true)
+        end
         apply("alabaster", theme)
     else
         light_terminal_colors()
 
         -- colors
-        local bg = "#f7f7f7"
+        local bg = custom or "#f7f7f7"
         local fg = "#000000"
         local punct_fg = "#777777"
         local def_fg = "#325cc0"
@@ -778,6 +902,9 @@ local function alabaster()
             ["@lsp.typemod.struct.declaration"] = { fg = def_fg },
             ["@lsp.typemod.type.declaration"] = { fg = def_fg },
         }
+        if custom then
+            retint(theme, custom, false)
+        end
         apply("alabaster", theme)
     end
 end
@@ -785,12 +912,14 @@ end
 -- alabaster-bg: light theme, all text black, color conveyed via backgrounds.
 local function alabaster_bg()
     clear()
-    vim.o.background = "light"
+    local custom = custom_background()
+    local dark = custom and color.is_dark(custom) or false
+    vim.o.background = dark and "dark" or "light"
     light_terminal_colors()
 
-    local bg_main = "#fafafa"
-    local bg_subtle = "#f0f0f0"
-    local bg_dark = "#ebebeb"
+    local bg_main = custom or "#fafafa"
+    local bg_subtle = custom and blend(bg_main, dark, 0.06, 0.04) or "#f0f0f0"
+    local bg_dark = custom and blend(bg_main, dark, 0.09, 0.08) or "#ebebeb"
     local bg_string = "#f1fadf"
     local bg_string_esc = "#dbecb6"
     local bg_comment = "#fffabc"
@@ -798,7 +927,8 @@ local function alabaster_bg()
     local bg_error = "#ffe0e0"
     local bg_blue_menu = "#b4d8fd"
     local bg_yellow = "#ffbc5d"
-    local black = "#000000"
+    local black = dark and "#F7F7F7" or "#000000"
+    local on_color = "#000000"
     local grey_dark = "#707070"
     local grey_light = "#8a8a8a"
     local purple = "#7a3e9d"
@@ -807,198 +937,204 @@ local function alabaster_bg()
     local theme = {
         ColorColumn = { bg = bg_dark },
         Conceal = { fg = black, bg = bg_main },
-        Cursor = { bg = blue_bright, fg = black },
+        Cursor = { bg = blue_bright, fg = on_color },
         CursorColumn = { bg = bg_subtle },
         CursorLine = { bg = bg_subtle },
         Directory = { fg = blue_bright },
-        DiffAdd = { fg = black, bg = bg_string },
-        DiffChange = { fg = black, bg = bg_blue_menu },
-        DiffDelete = { fg = black, bg = bg_error },
-        DiffText = { fg = black, bg = bg_definition },
+        DiffAdd = { fg = on_color, bg = bg_string },
+        DiffChange = { fg = on_color, bg = bg_blue_menu },
+        DiffDelete = { fg = on_color, bg = bg_error },
+        DiffText = { fg = on_color, bg = bg_definition },
         EndOfBuffer = { fg = grey_dark },
-        ErrorMsg = { fg = black, bg = bg_error },
+        ErrorMsg = { fg = on_color, bg = bg_error },
         VertSplit = { fg = grey_dark, bg = bg_main },
         Folded = { fg = black, bg = bg_dark },
         FoldColumn = { fg = black, bg = bg_dark },
         SignColumn = { fg = black, bg = bg_main },
-        IncSearch = { fg = black, bg = bg_yellow },
+        IncSearch = { fg = on_color, bg = bg_yellow },
         LineNr = { fg = grey_dark, bg = bg_main },
         CursorLineNr = { fg = black },
-        MatchParen = { fg = black, bg = bg_definition },
-        MoreMsg = { fg = black, bg = bg_blue_menu },
+        MatchParen = { fg = on_color, bg = bg_definition },
+        MoreMsg = { fg = on_color, bg = bg_blue_menu },
         NonText = { fg = grey_dark, bg = bg_main },
         Normal = { bg = bg_main, fg = black },
         NormalFloat = { bg = bg_subtle },
         FloatBorder = { fg = grey_dark, bg = bg_subtle },
-        Pmenu = { fg = black, bg = bg_blue_menu },
+        Pmenu = { fg = on_color, bg = bg_blue_menu },
         PmenuSel = { fg = black, bg = bg_dark },
-        PmenuSbar = { fg = black, bg = bg_blue_menu },
+        PmenuSbar = { fg = on_color, bg = bg_blue_menu },
         PmenuThumb = { fg = black, bg = bg_dark },
-        Question = { fg = black, bg = bg_blue_menu },
+        Question = { fg = on_color, bg = bg_blue_menu },
         QuickFixLine = { fg = black, bg = bg_dark },
-        Search = { fg = black, bg = bg_yellow },
+        Search = { fg = on_color, bg = bg_yellow },
         SpecialKey = { fg = blue_bright },
-        SpellBad = { fg = black, bg = bg_error },
-        SpellCap = { fg = black, bg = bg_error },
-        SpellLocal = { fg = black, bg = bg_string },
-        SpellRare = { fg = black, bg = bg_comment },
-        StatusLine = { fg = black, bg = bg_blue_menu },
+        SpellBad = { fg = on_color, bg = bg_error },
+        SpellCap = { fg = on_color, bg = bg_error },
+        SpellLocal = { fg = on_color, bg = bg_string },
+        SpellRare = { fg = on_color, bg = bg_comment },
+        StatusLine = { fg = on_color, bg = bg_blue_menu },
         StatusLineNC = { fg = black, bg = bg_dark },
-        TabLine = { fg = black, bg = bg_blue_menu },
-        TabLineFill = { fg = black, bg = bg_blue_menu },
+        TabLine = { fg = on_color, bg = bg_blue_menu },
+        TabLineFill = { fg = on_color, bg = bg_blue_menu },
         TabLineSel = { fg = black, bg = bg_main },
-        Title = { fg = black, bg = bg_definition },
+        Title = { fg = on_color, bg = bg_definition },
         Visual = { bg = bg_blue_menu },
         VisualNOS = { fg = black, bg = bg_dark },
-        WarningMsg = { fg = black, bg = bg_blue_menu },
+        WarningMsg = { fg = on_color, bg = bg_blue_menu },
         WildMenu = { fg = black, bg = bg_main },
         WinBar = { bg = bg_main, fg = black, bold = true },
         WinBarNC = { bg = bg_main, fg = grey_dark },
 
-        Comment = { fg = black, bg = bg_comment },
+        Comment = { fg = on_color, bg = bg_comment },
         Constant = { fg = purple },
-        String = { fg = black, bg = bg_string },
-        Character = { fg = black, bg = bg_string },
+        String = { fg = on_color, bg = bg_string },
+        Character = { fg = on_color, bg = bg_string },
         Number = { fg = purple },
         Boolean = { fg = purple },
         Float = { fg = purple },
         Identifier = { fg = black },
-        Function = { fg = black, bg = bg_definition },
+        Function = { fg = on_color, bg = bg_definition },
         Statement = { fg = black },
         Conditional = { fg = black },
         Repeat = { fg = black },
-        Label = { fg = black, bg = bg_definition },
+        Label = { fg = on_color, bg = bg_definition },
         Keyword = { fg = black },
         Exception = { fg = black },
         PreProc = { fg = black },
         Include = { fg = black },
-        Define = { fg = black, bg = bg_definition },
+        Define = { fg = on_color, bg = bg_definition },
         Macro = { fg = black },
         PreCondit = { fg = black },
         Type = { fg = black },
         StorageClass = { fg = black },
-        Structure = { fg = black, bg = bg_definition },
-        Typedef = { fg = black, bg = bg_definition },
+        Structure = { fg = on_color, bg = bg_definition },
+        Typedef = { fg = on_color, bg = bg_definition },
         Special = { fg = black },
-        SpecialComment = { fg = black, bg = bg_comment },
-        Error = { fg = black, bg = bg_error },
-        Todo = { fg = black, bg = bg_comment },
+        SpecialComment = { fg = on_color, bg = bg_comment },
+        Error = { fg = on_color, bg = bg_error },
+        Todo = { fg = on_color, bg = bg_comment },
         Operator = { fg = grey_dark },
 
         --- Alabaster query capture targets: force bg so treesitter queries pop
         ["@AlabasterBase"] = { fg = black },
         ["@AlabasterConstant"] = { fg = purple },
-        ["@AlabasterDefinition"] = { fg = black, bg = bg_definition },
+        ["@AlabasterDefinition"] = { fg = on_color, bg = bg_definition },
         ["@AlabasterPunct"] = { fg = grey_dark },
-        ["@AlabasterString"] = { fg = black, bg = bg_string },
-        ["@AlabasterComment"] = { fg = black, bg = bg_comment },
+        ["@AlabasterString"] = { fg = on_color, bg = bg_string },
+        ["@AlabasterComment"] = { fg = on_color, bg = bg_comment },
         ["@AlabasterHashbang"] = { fg = grey_light },
         ["@AlabasterPunctuation"] = { fg = grey_dark },
     }
+    if dark then
+        theme.Visual = { fg = on_color, bg = bg_blue_menu }
+    end
     apply("alabaster-bg", theme)
 end
 
 -- alabaster-mono: light monochrome, only the cursor is colored.
 local function alabaster_mono()
     clear()
-    vim.o.background = "light"
+    local custom = custom_background()
+    local dark = custom and color.is_dark(custom) or false
+    vim.o.background = dark and "dark" or "light"
     light_terminal_colors()
 
-    local bg_main = "#ffffff"
-    local bg_highlight = "#eeeeee"
-    local bg_light_grey = "#d9d9d9"
-    local bg_subtle = "#fafafa"
+    local bg_main = custom or "#ffffff"
+    local bg_highlight = custom and blend(bg_main, dark, 0.08, 0.07) or "#eeeeee"
+    local bg_light_grey = custom and blend(bg_main, dark, 0.16, 0.15) or "#d9d9d9"
+    local bg_subtle = custom and blend(bg_main, dark, 0.03, 0.02) or "#fafafa"
+    local fg = dark and "#F7F7F7" or "#000000"
     local black = "#000000"
     local grey = "#999999"
     local cyan = "#16bdec"
 
     local theme = {
         ColorColumn = { bg = bg_highlight },
-        Conceal = { fg = black, bg = bg_main },
+        Conceal = { fg = fg, bg = bg_main },
         Cursor = { bg = cyan, fg = black },
         CursorColumn = { bg = bg_subtle },
         CursorLine = { bg = bg_subtle },
-        Directory = { fg = black, bg = bg_highlight },
-        DiffAdd = { fg = black, bg = bg_highlight },
-        DiffChange = { fg = black, bg = bg_light_grey },
+        Directory = { fg = fg, bg = bg_highlight },
+        DiffAdd = { fg = fg, bg = bg_highlight },
+        DiffChange = { fg = fg, bg = bg_light_grey },
         DiffDelete = { fg = grey, bg = bg_main },
-        DiffText = { fg = black, bg = bg_highlight },
+        DiffText = { fg = fg, bg = bg_highlight },
         EndOfBuffer = { fg = grey },
-        ErrorMsg = { fg = black, bg = bg_light_grey },
+        ErrorMsg = { fg = fg, bg = bg_light_grey },
         VertSplit = { fg = grey, bg = bg_main },
         Folded = { fg = grey, bg = bg_main },
         FoldColumn = { fg = grey, bg = bg_main },
         SignColumn = { fg = grey, bg = bg_main },
         IncSearch = { fg = black, bg = cyan },
         LineNr = { fg = grey, bg = bg_main },
-        CursorLineNr = { fg = black },
-        MatchParen = { fg = black, bg = bg_highlight },
-        MoreMsg = { fg = black, bg = bg_main },
+        CursorLineNr = { fg = fg },
+        MatchParen = { fg = fg, bg = bg_highlight },
+        MoreMsg = { fg = fg, bg = bg_main },
         NonText = { fg = grey, bg = bg_main },
-        Normal = { bg = bg_main, fg = black },
+        Normal = { bg = bg_main, fg = fg },
         NormalFloat = { bg = bg_light_grey },
         FloatBorder = { fg = grey, bg = bg_light_grey },
-        Pmenu = { fg = black, bg = bg_light_grey },
-        PmenuSel = { fg = black, bg = bg_highlight },
-        PmenuSbar = { fg = black, bg = bg_light_grey },
-        PmenuThumb = { fg = black, bg = bg_highlight },
-        Question = { fg = black, bg = bg_main },
-        QuickFixLine = { fg = black, bg = bg_highlight },
-        Search = { fg = black, bg = bg_highlight },
+        Pmenu = { fg = fg, bg = bg_light_grey },
+        PmenuSel = { fg = fg, bg = bg_highlight },
+        PmenuSbar = { fg = fg, bg = bg_light_grey },
+        PmenuThumb = { fg = fg, bg = bg_highlight },
+        Question = { fg = fg, bg = bg_main },
+        QuickFixLine = { fg = fg, bg = bg_highlight },
+        Search = { fg = fg, bg = bg_highlight },
         SpecialKey = { fg = grey },
-        SpellBad = { fg = black, bg = bg_light_grey },
+        SpellBad = { fg = fg, bg = bg_light_grey },
         SpellCap = { fg = grey, bg = bg_light_grey },
-        SpellLocal = { fg = black, bg = bg_highlight },
+        SpellLocal = { fg = fg, bg = bg_highlight },
         SpellRare = { fg = grey, bg = bg_highlight },
-        StatusLine = { fg = black, bg = bg_light_grey },
+        StatusLine = { fg = fg, bg = bg_light_grey },
         StatusLineNC = { fg = grey, bg = bg_light_grey },
-        TabLine = { fg = black, bg = bg_light_grey },
+        TabLine = { fg = fg, bg = bg_light_grey },
         TabLineFill = { fg = grey, bg = bg_light_grey },
-        TabLineSel = { fg = black, bg = bg_main },
-        Title = { fg = black, bg = bg_highlight },
+        TabLineSel = { fg = fg, bg = bg_main },
+        Title = { fg = fg, bg = bg_highlight },
         Visual = { bg = bg_light_grey },
         VisualNOS = { fg = grey, bg = bg_main },
-        WarningMsg = { fg = black, bg = bg_light_grey },
-        WildMenu = { fg = black, bg = bg_main },
-        WinBar = { bg = bg_main, fg = black, bold = true },
+        WarningMsg = { fg = fg, bg = bg_light_grey },
+        WildMenu = { fg = fg, bg = bg_main },
+        WinBar = { bg = bg_main, fg = fg, bold = true },
         WinBarNC = { bg = bg_main, fg = grey },
 
         Comment = { fg = grey },
-        Constant = { fg = black, bg = bg_highlight },
-        String = { fg = black, bg = bg_highlight },
-        Character = { fg = black, bg = bg_highlight },
-        Number = { fg = black, bg = bg_highlight },
-        Boolean = { fg = black, bg = bg_highlight },
-        Float = { fg = black, bg = bg_highlight },
-        Identifier = { fg = black, bg = bg_highlight },
-        Function = { fg = black, bg = bg_highlight },
-        Statement = { fg = black },
-        Conditional = { fg = black },
-        Repeat = { fg = black },
-        Label = { fg = black },
-        Keyword = { fg = black },
-        Exception = { fg = black },
-        PreProc = { fg = black },
-        Include = { fg = black },
-        Define = { fg = black, bg = bg_highlight },
-        Macro = { fg = black },
-        PreCondit = { fg = black },
-        Type = { fg = black },
-        StorageClass = { fg = black },
-        Structure = { fg = black },
-        Typedef = { fg = black },
-        Special = { fg = black },
+        Constant = { fg = fg, bg = bg_highlight },
+        String = { fg = fg, bg = bg_highlight },
+        Character = { fg = fg, bg = bg_highlight },
+        Number = { fg = fg, bg = bg_highlight },
+        Boolean = { fg = fg, bg = bg_highlight },
+        Float = { fg = fg, bg = bg_highlight },
+        Identifier = { fg = fg, bg = bg_highlight },
+        Function = { fg = fg, bg = bg_highlight },
+        Statement = { fg = fg },
+        Conditional = { fg = fg },
+        Repeat = { fg = fg },
+        Label = { fg = fg },
+        Keyword = { fg = fg },
+        Exception = { fg = fg },
+        PreProc = { fg = fg },
+        Include = { fg = fg },
+        Define = { fg = fg, bg = bg_highlight },
+        Macro = { fg = fg },
+        PreCondit = { fg = fg },
+        Type = { fg = fg },
+        StorageClass = { fg = fg },
+        Structure = { fg = fg },
+        Typedef = { fg = fg },
+        Special = { fg = fg },
         SpecialComment = { fg = grey },
-        Error = { fg = black, bg = bg_light_grey },
-        Todo = { fg = black, bg = bg_highlight },
-        Operator = { fg = black },
+        Error = { fg = fg, bg = bg_light_grey },
+        Todo = { fg = fg, bg = bg_highlight },
+        Operator = { fg = fg },
 
         --- Alabaster query capture targets
-        ["@AlabasterBase"] = { fg = black },
-        ["@AlabasterConstant"] = { fg = black, bg = bg_highlight },
-        ["@AlabasterDefinition"] = { fg = black, bg = bg_highlight },
+        ["@AlabasterBase"] = { fg = fg },
+        ["@AlabasterConstant"] = { fg = fg, bg = bg_highlight },
+        ["@AlabasterDefinition"] = { fg = fg, bg = bg_highlight },
         ["@AlabasterPunct"] = { fg = grey },
-        ["@AlabasterString"] = { fg = black, bg = bg_highlight },
+        ["@AlabasterString"] = { fg = fg, bg = bg_highlight },
         ["@AlabasterComment"] = { fg = grey },
         ["@AlabasterHashbang"] = { fg = grey },
         ["@AlabasterPunctuation"] = { fg = grey },
